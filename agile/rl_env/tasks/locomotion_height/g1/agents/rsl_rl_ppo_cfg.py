@@ -45,8 +45,8 @@ class G1VelocityHeightPpoRunnerCfg(RslRlOnPolicyRunnerCfg):
     entropy_annealing_decay_rate = 0.9995
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
-        actor_hidden_dims=[1024, 512, 256],
-        critic_hidden_dims=[1024, 512, 256],
+        actor_hidden_dims=[512, 256, 128],
+        critic_hidden_dims=[512, 256, 128],
         activation="elu",
     )
     algorithm = RslRlPpoAlgorithmCfg(
@@ -120,3 +120,67 @@ class G1VelocityHeightDistillationHistoryRunnerCfg(G1VelocityHeightPpoRunnerCfg)
         student_hidden_dims=[512, 256, 128],
         activation="elu",
     )
+
+
+# Variant 2: Static during walking, No curriculum
+@configclass
+class G1VelocityHeightPpoRunnerCfgV2(G1VelocityHeightPpoRunnerCfg):
+    experiment_name = "velocity_height_g1_v2_static_nocurr"
+    run_name = "velocity_height_g1_v2_static_nocurr"
+    wandb_project = "Velocity-Height-G1-V2-static-nocurr"
+
+
+# Variant 3: Moving during walking, No curriculum
+@configclass
+class G1VelocityHeightPpoRunnerCfgV3(G1VelocityHeightPpoRunnerCfg):
+    experiment_name = "velocity_height_g1_v3_moving_nocurr"
+    run_name = "velocity_height_g1_v3_moving_nocurr"
+    wandb_project = "Velocity-Height-G1-V3-moving-nocurr"
+
+
+# Variant 4: Moving during walking, With curriculum, Same height during walking
+@configclass
+class G1VelocityHeightPpoRunnerCfgV4(G1VelocityHeightPpoRunnerCfg):
+    experiment_name = "velocity_height_g1_v4_moving_curr_sameheight"
+    run_name = "velocity_height_g1_v4_moving_curr_sameheight"
+    wandb_project = "Velocity-Height-G1-V4-moving-curr-sameheight"
+
+
+# Variant 5: Static during walking, No curriculum, Same height during walking
+@configclass
+class G1VelocityHeightPpoRunnerCfgV5(G1VelocityHeightPpoRunnerCfg):
+    experiment_name = "velocity_height_g1_v5_static_nocurr_sameheight"
+    run_name = "velocity_height_g1_v5_static_nocurr_sameheight"
+    wandb_project = "Velocity-Height-G1-V5-static-nocurr-sameheight"
+
+
+# Flat terrain variant: No terrain curriculum, flat terrain only
+@configclass
+class G1VelocityHeightFlatPpoRunnerCfg(G1VelocityHeightPpoRunnerCfg):
+    experiment_name = "velocity_height_g1_flat"
+    run_name = "velocity_height_g1_flat"
+    wandb_project = "Velocity-Height-G1-Flat"
+
+
+# Flat terrain with linear velocity profile variant
+@configclass
+class G1VelocityHeightFlatLinearPpoRunnerCfg(G1VelocityHeightPpoRunnerCfg):
+    experiment_name = "velocity_height_g1_flat_linear"
+    run_name = "velocity_height_g1_flat_linear"
+    wandb_project = "Velocity-Height-G1-Flat-Linear"
+
+
+# Flat terrain with linear velocity profile, no curriculum variant
+@configclass
+class G1VelocityHeightFlatLinearNoCurrPpoRunnerCfg(G1VelocityHeightPpoRunnerCfg):
+    experiment_name = "velocity_height_g1_flat_linear_nocurr"
+    run_name = "velocity_height_g1_flat_linear_nocurr"
+    wandb_project = "Velocity-Height-G1-Flat-Linear-NoCurr"
+
+
+# Flat terrain with linear velocity profile, static during walking, no curriculum variant
+@configclass
+class G1VelocityHeightFlatLinearStaticNoCurrPpoRunnerCfg(G1VelocityHeightPpoRunnerCfg):
+    experiment_name = "velocity_height_g1_flat_linear_static_nocurr"
+    run_name = "velocity_height_g1_flat_linear_static_nocurr"
+    wandb_project = "Velocity-Height-G1-Flat-Linear-Static-NoCurr"

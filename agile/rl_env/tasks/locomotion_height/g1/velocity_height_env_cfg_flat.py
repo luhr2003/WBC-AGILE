@@ -35,7 +35,6 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise  # noqa: F401
 
 from agile.rl_env import mdp
 from agile.rl_env.assets.robots import unitree_g1
-from agile.rl_env.mdp.terrains import LESS_ROUGH_TERRAIN_CFG, ROUGH_TERRAIN_CFG  # noqa: F401, F403
 
 ##
 # Scene definition
@@ -107,75 +106,13 @@ class PrivilegedVelocityCriticCfg(ObsGroup):
 
 
 @configclass
-class StudentVelocityPolicyCfg(ObsGroup):
-    """Observations for student policy group."""
-
-    velocity_height_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
-
-    # observation terms (order preserved)
-    base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
-    projected_gravity = ObsTerm(
-        func=mdp.projected_gravity,
-        noise=Unoise(n_min=-0.01, n_max=0.01),
-    )
-    joint_pos = ObsTerm(
-        func=mdp.joint_pos_rel,
-        noise=Unoise(n_min=-0.01, n_max=0.01),
-        params={"asset_cfg": SceneEntityCfg("robot")},
-    )
-    joint_vel = ObsTerm(
-        func=mdp.joint_vel_rel,
-        noise=Unoise(n_min=-1.5, n_max=1.5),
-        scale=0.1,
-        params={"asset_cfg": SceneEntityCfg("robot")},
-    )
-    actions = ObsTerm(func=mdp.last_action, clip=(-10.0, 10.0))
-
-    def __post_init__(self):
-        self.enable_corruption = True
-        self.concatenate_terms = False
-
-
-@configclass
-class TeacherRecurrentStudentObservationsCfg:
-    """Observation specifications for the MDP."""
-
-    # the policy is the student policy
-    policy: StudentVelocityPolicyCfg = StudentVelocityPolicyCfg()
-    # the teacher gets is the privileged observations
-    teacher: PrivilegedVelocityPolicyCfg = PrivilegedVelocityPolicyCfg()
-
-    def __post_init__(self):
-        self.policy.enable_corruption = True
-        self.teacher.enable_corruption = True
-
-
-@configclass
-class TeacherHistoryStudentObservationsCfg:
-    """Observation specifications for the MDP."""
-
-    # the policy is the student policy
-    policy: StudentVelocityPolicyCfg = StudentVelocityPolicyCfg()
-    # the teacher gets is the privileged observations
-    teacher: PrivilegedVelocityPolicyCfg = PrivilegedVelocityPolicyCfg()
-
-    def __post_init__(self):
-        self.policy.enable_corruption = True
-        self.teacher.enable_corruption = True
-
-        self.policy.history_length = 5
-        self.policy.concatenate_terms = False
-        self.policy.flatten_history_dim = False
-
-
-@configclass
 class MySceneCfg(InteractiveSceneCfg):
     """Configuration for the terrain scene with a legged robot."""
 
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
-        terrain_type="generator",
-        terrain_generator=LESS_ROUGH_TERRAIN_CFG,
+        terrain_type="plane",
+        terrain_generator=None,
         max_init_terrain_level=1,
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
@@ -778,18 +715,7 @@ class LocomotionEventCfg:
 class CurriculumCfg:
     """Curriculum terms for the MDP."""
 
-    terrain_levels = CurrTerm(
-        func=mdp.terrain_levels_vel_curriculum,
-        params={
-            "command_name": "base_velocity",
-            "move_up_distance": 4.0,
-            "move_down_distance": 2.0,
-            "n_successes": 5,
-            "n_failures": 10,
-            "p_random_move_up": 0.0,
-            "p_random_move_down": 0.0,
-        },
-    )
+    # Removed terrain_levels curriculum - using flat terrain only
 
     remove_harness = CurrTerm(
         func=mdp.remove_harness,
@@ -826,8 +752,8 @@ class CurriculumCfg:
 
 
 @configclass
-class G1LowerVelocityHeightEnvCfg(ManagerBasedRLEnvCfg):
-    """Configuration for the G1 velocity tracking environment."""
+class G1LowerVelocityHeightFlatEnvCfg(ManagerBasedRLEnvCfg):
+    """Configuration for the G1 velocity tracking environment on flat terrain."""
 
     # Scene settings
     scene: MySceneCfg = MySceneCfg(num_envs=4096, env_spacing=2.5)
@@ -873,14 +799,9 @@ class G1LowerVelocityHeightEnvCfg(ManagerBasedRLEnvCfg):
         if getattr(self.scene, "height_scanner_right_foot", None) is not None:
             self.scene.height_scanner_right_foot.update_period = self.decimation * self.sim.dt
 
-        # check if terrain levels curriculum is enabled - if so, enable curriculum for terrain generator
-        # this generates terrains with increasing difficulty and is useful for training
-        if getattr(self.curriculum, "terrain_levels", None) is not None:
-            if self.scene.terrain.terrain_generator is not None:
-                self.scene.terrain.terrain_generator.curriculum = True
-        else:
-            if self.scene.terrain.terrain_generator is not None:
-                self.scene.terrain.terrain_generator.curriculum = False
+        # Force flat terrain - no terrain generator or curriculum
+        self.scene.terrain.terrain_type = "plane"
+        self.scene.terrain.terrain_generator = None
 
     def eval(self):
         self.scene.terrain.terrain_type = "plane"
@@ -900,57 +821,3 @@ class G1LowerVelocityHeightEnvCfg(ManagerBasedRLEnvCfg):
         if hasattr(self.actions, "harness"):
             del self.actions.harness
 
-
-@configclass
-class G1VelocityHeightRecurrentStudentEnvCfg(G1LowerVelocityHeightEnvCfg):
-    """Configuration for the student distillation locomotion velocity-tracking environment."""
-
-    # Scene settings
-    observations: TeacherRecurrentStudentObservationsCfg = TeacherRecurrentStudentObservationsCfg()
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        # disable harness immediately
-        if hasattr(self.curriculum, "remove_harness"):
-            del self.curriculum.remove_harness
-
-        if hasattr(self.actions, "harness"):
-            del self.actions.harness
-
-        self.observations.policy.enable_corruption = True
-        self.observations.policy.concatenate_terms = False
-        self.observations.teacher.concatenate_terms = False
-
-    def eval(self):
-        # Add evaluation observations
-        self.observations.eval = mdp.EvaluationObservationsCfg()
-
-        self.scene.terrain.terrain_type = "plane"
-        self.scene.terrain.terrain_generator = None
-        self.viewer.eye = (-2.5, -5.0, 2.0)
-        self.viewer.lookat = (0.0, 0.0, 0.75)
-        self.viewer.origin_type = "world"
-        self.events = None
-        self.rewards = None
-        self.curriculum = None
-        self.observations.policy.enable_corruption = False
-        self.observations.policy.flatten_history_dim = True
-        self.observations.policy.concatenate_terms = True
-        self.observations.teacher.concatenate_terms = True
-
-
-@configclass
-class G1VelocityHeightHistoryStudentEnvCfg(G1VelocityHeightRecurrentStudentEnvCfg):
-    """Configuration for the student distillation locomotion velocity-tracking environment."""
-
-    # Scene settings
-    observations: TeacherHistoryStudentObservationsCfg = TeacherHistoryStudentObservationsCfg()
-
-    def __post_init__(self):
-        super().__post_init__()
-
-        # Don't concatenate observations if mirror loss will be used
-        # Mirror loss requires structured (dictionary) observations
-        self.observations.policy.concatenate_terms = False
-        self.observations.policy.flatten_history_dim = False

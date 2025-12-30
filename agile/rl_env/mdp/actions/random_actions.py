@@ -227,6 +227,9 @@ class RandomPositionAction(JointAction):
         num_envs_to_sample = mask.sum()
         ra = self._upper_action_ratio
         
+        # Clamp ra to valid range to prevent numerical issues
+        ra = max(0.0, min(1.0, ra))
+        
         if ra >= 1.0 - 1e-6:
             # ra ≈ 1: use uniform sampling across full joint range
             sampled_ratios = torch.rand(
@@ -238,7 +241,12 @@ class RandomPositionAction(JointAction):
             # ra < 1: use curriculum sampling formula
             # Precompute constants
             factor = 20.0 * (1.0 - ra)
-            exp_term = torch.exp(-factor)
+            # Clamp factor to prevent numerical overflow/underflow
+            # factor should be in (0, 20], but add safety margin
+            factor = max(1e-6, min(20.0, factor))
+            # Convert factor to tensor for torch.exp()
+            factor_tensor = torch.tensor(factor, device=self._asset.device, dtype=torch.float32)
+            exp_term = torch.exp(-factor_tensor)
             denominator = 1.0 - exp_term
             
             # Sample U(0,1)
@@ -252,7 +260,7 @@ class RandomPositionAction(JointAction):
             inner_term = 1.0 - u * denominator
             # Clamp to avoid numerical issues
             inner_term = torch.clamp(inner_term, min=1e-8, max=1.0 - 1e-8)
-            sampled_ratios = -1.0 / factor * torch.log(inner_term)
+            sampled_ratios = -1.0 / factor_tensor * torch.log(inner_term)
         
         # Get default positions (offset) and joint limits
         default_positions = self._offset[mask]

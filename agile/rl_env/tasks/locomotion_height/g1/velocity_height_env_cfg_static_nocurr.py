@@ -306,9 +306,9 @@ class ActionsCfg:
             enable_velocity_limits=True,
         ),
         preserve_order=True,
-        no_random_when_walking=False,
+        no_random_when_walking=True,  # Variant 2: Static during walking
         command_name="base_velocity",
-        use_curriculum_sampling=True,  # Enable curriculum learning for upper-body poses
+        use_curriculum_sampling=False,  # Variant 2: No curriculum
     )
 
     harness = mdp.HarnessActionCfg(
@@ -811,22 +811,10 @@ class CurriculumCfg:
         },
     )
 
-    upper_body_pose_curriculum = CurrTerm(
-        func=mdp.upper_body_pose_curriculum,
-        params={
-            "action_name": "random_upper_body_pos",
-            "reward_name": "track_lin_vel_xy_exp",
-            "reward_threshold": 0.4,  # Reward threshold to consider as success
-            "ra_step": 0.05,  # Increase ra by 0.05 each time threshold is reached
-            "max_ra": 1.0,  # Maximum ra value
-            "required_successes": 1,  # Number of consecutive successes needed to increase ra
-            "ema_decay": 0.99,  # EMA decay rate for success rate tracking
-        },
-    )
 
 
 @configclass
-class G1LowerVelocityHeightEnvCfg(ManagerBasedRLEnvCfg):
+class G1LowerVelocityHeightEnvCfgV2(ManagerBasedRLEnvCfg):
     """Configuration for the G1 velocity tracking environment."""
 
     # Scene settings
@@ -902,7 +890,7 @@ class G1LowerVelocityHeightEnvCfg(ManagerBasedRLEnvCfg):
 
 
 @configclass
-class G1VelocityHeightRecurrentStudentEnvCfg(G1LowerVelocityHeightEnvCfg):
+class G1VelocityHeightRecurrentStudentEnvCfgV2(G1LowerVelocityHeightEnvCfgV2):
     """Configuration for the student distillation locomotion velocity-tracking environment."""
 
     # Scene settings
@@ -941,7 +929,7 @@ class G1VelocityHeightRecurrentStudentEnvCfg(G1LowerVelocityHeightEnvCfg):
 
 
 @configclass
-class G1VelocityHeightHistoryStudentEnvCfg(G1VelocityHeightRecurrentStudentEnvCfg):
+class G1VelocityHeightHistoryStudentEnvCfgV2(G1VelocityHeightRecurrentStudentEnvCfgV2):
     """Configuration for the student distillation locomotion velocity-tracking environment."""
 
     # Scene settings

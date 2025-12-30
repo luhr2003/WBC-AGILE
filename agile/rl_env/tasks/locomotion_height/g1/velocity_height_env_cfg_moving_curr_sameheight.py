@@ -263,8 +263,8 @@ class CommandsCfg:
             base_height=(0.4, unitree_g1.DEFAULT_PELVIS_HEIGHT),
         ),
         min_walk_height=0.5,
-        random_height_during_walking=True,
-        bias_height_randomization=True,
+        random_height_during_walking=False,  # Variant 4: Same height during walking
+        bias_height_randomization=False,
         height_sensor="height_measurement_sensor",
         root_name="pelvis",
     )
@@ -306,9 +306,9 @@ class ActionsCfg:
             enable_velocity_limits=True,
         ),
         preserve_order=True,
-        no_random_when_walking=False,
+        no_random_when_walking=False,  # Variant 4: Moving during walking
         command_name="base_velocity",
-        use_curriculum_sampling=True,  # Enable curriculum learning for upper-body poses
+        use_curriculum_sampling=True,  # Variant 4: With curriculum
     )
 
     harness = mdp.HarnessActionCfg(
@@ -816,7 +816,7 @@ class CurriculumCfg:
         params={
             "action_name": "random_upper_body_pos",
             "reward_name": "track_lin_vel_xy_exp",
-            "reward_threshold": 0.4,  # Reward threshold to consider as success
+            "reward_threshold": 0.5,  # Reward threshold to consider as success
             "ra_step": 0.05,  # Increase ra by 0.05 each time threshold is reached
             "max_ra": 1.0,  # Maximum ra value
             "required_successes": 1,  # Number of consecutive successes needed to increase ra
@@ -826,7 +826,7 @@ class CurriculumCfg:
 
 
 @configclass
-class G1LowerVelocityHeightEnvCfg(ManagerBasedRLEnvCfg):
+class G1LowerVelocityHeightEnvCfgV4(ManagerBasedRLEnvCfg):
     """Configuration for the G1 velocity tracking environment."""
 
     # Scene settings
@@ -902,7 +902,7 @@ class G1LowerVelocityHeightEnvCfg(ManagerBasedRLEnvCfg):
 
 
 @configclass
-class G1VelocityHeightRecurrentStudentEnvCfg(G1LowerVelocityHeightEnvCfg):
+class G1VelocityHeightRecurrentStudentEnvCfgV4(G1LowerVelocityHeightEnvCfgV4):
     """Configuration for the student distillation locomotion velocity-tracking environment."""
 
     # Scene settings
@@ -941,7 +941,7 @@ class G1VelocityHeightRecurrentStudentEnvCfg(G1LowerVelocityHeightEnvCfg):
 
 
 @configclass
-class G1VelocityHeightHistoryStudentEnvCfg(G1VelocityHeightRecurrentStudentEnvCfg):
+class G1VelocityHeightHistoryStudentEnvCfgV4(G1VelocityHeightRecurrentStudentEnvCfgV4):
     """Configuration for the student distillation locomotion velocity-tracking environment."""
 
     # Scene settings
