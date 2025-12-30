@@ -77,6 +77,11 @@ class RandomActionCfg(mdp.JointActionCfg):
     """Dictionary mapping joint names to custom position limits (lower_limit, upper_limit).
     If provided, overrides the default joint limits from the robot asset. Defaults to None."""
 
+    use_curriculum_sampling: bool = False
+    """If True, use curriculum learning sampling for upper body poses.
+    The sampling range is controlled by the upper_action_ratio (ra), which is updated
+    by the upper_body_pose_curriculum. When False, uses uniform sampling."""
+
 
 @configclass
 class JointPositionGUIActionCfg(mdp.JointActionCfg):

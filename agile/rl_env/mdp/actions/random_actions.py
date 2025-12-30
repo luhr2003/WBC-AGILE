@@ -113,6 +113,10 @@ class RandomPositionAction(JointAction):
         self._processed_actions = self._offset.clone()
         self._target_processed_actions = self._offset.clone()
 
+        # Curriculum learning parameters
+        self._use_curriculum_sampling = cfg.use_curriculum_sampling
+        self._upper_action_ratio = 0.0  # ra: starts at 0, increases to 1.0
+
         # Do not export the IO descriptor for this action term.
         self._export_IO_descriptor = False
 
@@ -157,15 +161,21 @@ class RandomPositionAction(JointAction):
         # Sample random joint position targets within the joint limits
         if resample_action_mask.any():
             # Sample new target positions
-            new_targets = (
-                torch.rand(
-                    resample_action_mask.sum(),
-                    self._num_joints,
-                    device=self._asset.device,
-                )  # type: ignore[call-overload]
-                * (self._joint_limits[resample_action_mask, :, 1] - self._joint_limits[resample_action_mask, :, 0])
-                + self._joint_limits[resample_action_mask, :, 0]
-            )
+            if self._use_curriculum_sampling:
+                # Use curriculum learning sampling formula from paper
+                # ai = U(0, -1/(20(1-ra)) * ln(1 - U(0,1) * (1 - e^(-20(1-ra)))))
+                new_targets = self._sample_with_curriculum(resample_action_mask)
+            else:
+                # Uniform sampling
+                new_targets = (
+                    torch.rand(
+                        resample_action_mask.sum(),
+                        self._num_joints,
+                        device=self._asset.device,
+                    )  # type: ignore[call-overload]
+                    * (self._joint_limits[resample_action_mask, :, 1] - self._joint_limits[resample_action_mask, :, 0])
+                    + self._joint_limits[resample_action_mask, :, 0]
+                )
 
             self._target_processed_actions[resample_action_mask] = new_targets
 
@@ -192,6 +202,97 @@ class RandomPositionAction(JointAction):
 
         # Update positions using velocity profile
         self._processed_actions = self._velocity_profile.compute_next_position(dt=self._env.step_dt)
+
+    def _sample_with_curriculum(self, mask: torch.Tensor) -> torch.Tensor:
+        """Sample joint positions using curriculum learning formula.
+        
+        Uses the probability distribution from the paper:
+        p(x|ra) = 20(1-ra) * e^(-20(1-ra)*x) / (1 - e^(-20(1-ra)))
+        
+        The sampling formula is:
+        ai = U(0, -1/(20(1-ra)) * ln(1 - U(0,1) * (1 - e^(-20(1-ra)))))
+        
+        The sampled ratio ai (in [0, 1]) represents how far to deviate from the 
+        default position. It's applied to the full joint range:
+        - ai is sampled from a distribution that concentrates near 0 when ra is small
+        - ai is uniformly distributed in [0, 1] when ra = 1
+        - The final position is: default + ai * (joint_limit - default) in a random direction
+        
+        Args:
+            mask: Boolean mask indicating which environments to sample for.
+            
+        Returns:
+            Sampled target positions (absolute joint positions within limits).
+        """
+        num_envs_to_sample = mask.sum()
+        ra = self._upper_action_ratio
+        
+        if ra >= 1.0 - 1e-6:
+            # ra ≈ 1: use uniform sampling across full joint range
+            sampled_ratios = torch.rand(
+                num_envs_to_sample,
+                self._num_joints,
+                device=self._asset.device,
+            )  # type: ignore[call-overload]
+        else:
+            # ra < 1: use curriculum sampling formula
+            # Precompute constants
+            factor = 20.0 * (1.0 - ra)
+            exp_term = torch.exp(-factor)
+            denominator = 1.0 - exp_term
+            
+            # Sample U(0,1)
+            u = torch.rand(
+                num_envs_to_sample,
+                self._num_joints,
+                device=self._asset.device,
+            )  # type: ignore[call-overload]
+            
+            # Apply formula: ai = -1/factor * ln(1 - u * (1 - exp(-factor)))
+            inner_term = 1.0 - u * denominator
+            # Clamp to avoid numerical issues
+            inner_term = torch.clamp(inner_term, min=1e-8, max=1.0 - 1e-8)
+            sampled_ratios = -1.0 / factor * torch.log(inner_term)
+        
+        # Get default positions (offset) and joint limits
+        default_positions = self._offset[mask]
+        joint_mins = self._joint_limits[mask, :, 0]
+        joint_maxs = self._joint_limits[mask, :, 1]
+        
+        # Calculate maximum deviation possible from default in either direction
+        ranges_above = joint_maxs - default_positions  # positive direction from default
+        ranges_below = default_positions - joint_mins  # negative direction from default
+        
+        # Sample direction randomly (above or below default)
+        direction_mask = torch.rand(
+            num_envs_to_sample, self._num_joints, device=self._asset.device
+        ) < 0.5  # type: ignore[call-overload]
+        
+        # Choose the range based on direction
+        chosen_ranges = torch.where(direction_mask, ranges_above, ranges_below)
+        
+        # Apply sampled_ratios: ai=0 -> stay at default, ai=1 -> move to limit
+        # sampled_ratios is already in [0, 1] from the curriculum formula
+        offsets = sampled_ratios * chosen_ranges
+        
+        # Apply direction: positive for above, negative for below
+        offsets = torch.where(direction_mask, offsets, -offsets)
+        
+        # Calculate final target positions: default + offset
+        new_targets = default_positions + offsets
+        
+        # Clamp to joint limits to ensure valid positions
+        new_targets = torch.clamp(new_targets, joint_mins, joint_maxs)
+        
+        return new_targets
+
+    def set_upper_action_ratio(self, ra: float) -> None:
+        """Set the upper action ratio for curriculum learning.
+        
+        Args:
+            ra: Upper action ratio in [0, 1]. Controls the sampling distribution.
+        """
+        self._upper_action_ratio = max(0.0, min(1.0, ra))
 
     def apply_actions(self) -> None:
         # set position targets

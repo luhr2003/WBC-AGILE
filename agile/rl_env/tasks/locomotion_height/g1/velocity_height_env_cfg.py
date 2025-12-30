@@ -263,7 +263,8 @@ class CommandsCfg:
             base_height=(0.4, unitree_g1.DEFAULT_PELVIS_HEIGHT),
         ),
         min_walk_height=0.5,
-        random_height_during_walking=False,
+        random_height_during_walking=True,
+        bias_height_randomization=True,
         height_sensor="height_measurement_sensor",
         root_name="pelvis",
     )
@@ -305,8 +306,9 @@ class ActionsCfg:
             enable_velocity_limits=True,
         ),
         preserve_order=True,
-        no_random_when_walking=True,
+        no_random_when_walking=False,
         command_name="base_velocity",
+        use_curriculum_sampling=True,  # Enable curriculum learning for upper-body poses
     )
 
     harness = mdp.HarnessActionCfg(
@@ -348,10 +350,29 @@ class RewardsCfg:
         weight=1.0,
         params={"command_name": "base_velocity", "std": 0.2},
     )
-    track_base_height_exp_smooth = RewTerm(
-        func=mdp.track_base_height_exp_smooth,
-        weight=1.0,
-        params={"command_name": "base_velocity", "std": 0.2},
+    # -- height tracking rewards
+    # Main height tracking reward with tighter std for better sensitivity
+    track_base_height_exp = RewTerm(
+        func=mdp.track_base_height_exp,
+        weight=2.5,  # Increased weight for better height tracking
+        params={"command_name": "base_velocity", "std": math.sqrt(0.05)},  # Reduced std from 0.1 to 0.05 for better sensitivity
+    )
+    # L2 penalty for height error (encourages faster response)
+    # Function returns squared height error, so negative weight = penalty
+    track_base_height_l2 = RewTerm(
+        func=mdp.track_base_height_l2,
+        weight=-2.0,  # Increased penalty strength for height errors (was -0.1, too weak)
+        params={"command_name": "base_velocity"},
+    )
+    # Reward for moving towards target height (encourages quick response)
+    # This reward encourages knee flexion when height is too low and extension when too high
+    track_height_knee = RewTerm(
+        func=mdp.track_height_knee_reward,
+        weight=2.0,  # Increased weight to encourage proper knee flexion/extension
+        params={
+            "command_name": "base_velocity",
+            "knee_joint_names": [".*_knee_joint"],  # G1 uses knee_joint naming
+        },
     )
     no_undersired_base_velocity_exp = RewTerm(
         func=mdp.no_undersired_base_velocity_exp_if_null_cmd,
@@ -790,6 +811,19 @@ class CurriculumCfg:
         },
     )
 
+    upper_body_pose_curriculum = CurrTerm(
+        func=mdp.upper_body_pose_curriculum,
+        params={
+            "action_name": "random_upper_body_pos",
+            "reward_name": "track_lin_vel_xy_exp",
+            "reward_threshold": 0.5,  # Reward threshold to consider as success
+            "ra_step": 0.05,  # Increase ra by 0.05 each time threshold is reached
+            "max_ra": 1.0,  # Maximum ra value
+            "required_successes": 1,  # Number of consecutive successes needed to increase ra
+            "ema_decay": 0.99,  # EMA decay rate for success rate tracking
+        },
+    )
+
 
 @configclass
 class G1LowerVelocityHeightEnvCfg(ManagerBasedRLEnvCfg):
@@ -823,7 +857,7 @@ class G1LowerVelocityHeightEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 1.0 / self.physics_freq  # Should be 0.002
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
-        self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
+        self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**19
 
         # update sensor periods
         if self.scene.contact_forces is not None:

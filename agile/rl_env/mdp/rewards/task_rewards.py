@@ -20,6 +20,7 @@ from isaaclab.assets import RigidObject
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import RayCaster
+from isaaclab.utils import string as string_utils
 from isaaclab.utils.math import quat_apply_inverse, yaw_quat
 
 from agile.rl_env.mdp.commands import UniformVelocityBaseHeightCommand
@@ -229,4 +230,136 @@ def stand_still(
     # Ensure the reward has shape [num_envs]
     reward = feet_without_contact * is_null_cmd.float()
 
+    return reward
+
+
+def track_base_height_exp(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    std: float,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward tracking of base height commands using exponential kernel.
+    
+    This reward encourages the robot to track the target base height, enabling
+    squatting behavior and expanding the operational workspace.
+    
+    Args:
+        env: The environment.
+        command_name: Name of the height command.
+        std: Standard deviation for the exponential kernel.
+        asset_cfg: Configuration for the robot asset.
+    
+    Returns:
+        The reward tensor. Shape is (num_envs,).
+    """
+    # extract the used quantities (to enable type-hinting)
+    asset = env.scene[asset_cfg.name]
+    # get current base height (z position in world frame)
+    current_height = asset.data.root_pos_w[:, 2]
+    # get target height command
+    command_term: UniformVelocityBaseHeightCommand = env.command_manager.get_term(command_name)
+    target_height = command_term.target_height
+    # compute the error
+    height_error = torch.square(target_height - current_height)
+    return torch.exp(-height_error / std**2)
+
+
+def track_base_height_l2(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Penalty for height tracking error using L2 norm.
+    
+    This provides a more direct penalty for height errors, encouraging faster response.
+    
+    Args:
+        env: The environment.
+        command_name: Name of the height command.
+        asset_cfg: Configuration for the robot asset.
+    
+    Returns:
+        The penalty tensor. Shape is (num_envs,).
+    """
+    asset = env.scene[asset_cfg.name]
+    current_height = asset.data.root_pos_w[:, 2]
+    command_term: UniformVelocityBaseHeightCommand = env.command_manager.get_term(command_name)
+    target_height = command_term.target_height
+    height_error = torch.square(target_height - current_height)
+    return height_error  # Negative weight in config makes this a penalty
+
+
+def track_height_knee_reward(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    knee_joint_names: list[str],
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    r"""Reward for tracking height by encouraging knee flexion/extension.
+    
+    This reward implements the rknee term from the paper:
+    
+    rknee = -||(hr,t - ht) × (qknee,t - qknee,min)/(qknee,max - qknee,min - 1/2)||
+    
+    where:
+    - hr,t is the robot's actual height
+    - ht is the target height
+    - qknee,t is the current positions of robot's knee joints
+    - qknee,min and qknee,max are the minimum and maximum positions of knee joints
+    
+    This reward encourages flexion of the knee joints when hr,t < ht,
+    and encourages extension when hr,t > ht.
+    
+    Args:
+        env: The environment.
+        command_name: Name of the height command.
+        knee_joint_names: List of knee joint names (regex patterns supported).
+        asset_cfg: Configuration for the robot asset.
+    
+    Returns:
+        The reward tensor. Shape is (num_envs,).
+    """
+    # extract the used quantities
+    asset = env.scene[asset_cfg.name]
+    
+    # get current base height (z position in world frame)
+    current_height = asset.data.root_pos_w[:, 2]
+    # get target height command
+    command_term: UniformVelocityBaseHeightCommand = env.command_manager.get_term(command_name)
+    target_height = command_term.target_height
+    
+    # find knee joint indices using string matching utilities
+    try:
+        knee_joint_ids, _ = string_utils.resolve_matching_names(knee_joint_names, asset.joint_names)
+    except ValueError:
+        # Return zero reward if no knee joints found
+        return torch.zeros(env.num_envs, device=env.device)
+    
+    if len(knee_joint_ids) == 0:
+        # Return zero reward if no knee joints found
+        return torch.zeros(env.num_envs, device=env.device)
+    
+    # get knee joint positions
+    knee_pos = asset.data.joint_pos[:, knee_joint_ids]  # Shape: (num_envs, num_knee_joints)
+    
+    # get knee joint limits
+    knee_pos_limits = asset.data.default_joint_pos_limits[:, knee_joint_ids]  # Shape: (num_envs, num_knee_joints, 2)
+    knee_min = knee_pos_limits[:, :, 0]  # Shape: (num_envs, num_knee_joints)
+    knee_max = knee_pos_limits[:, :, 1]  # Shape: (num_envs, num_knee_joints)
+    
+    # compute normalized knee position: (qknee,t - qknee,min) / (qknee,max - qknee,min) - 1/2
+    knee_range = knee_max - knee_min
+    # avoid division by zero
+    knee_range = torch.clamp(knee_range, min=1e-6)
+    normalized_knee = (knee_pos - knee_min) / knee_range - 0.5  # Shape: (num_envs, num_knee_joints)
+    
+    # compute height error: (hr,t - ht)
+    height_error = current_height - target_height  # Shape: (num_envs,)
+    
+    # compute reward: -||(hr,t - ht) × normalized_knee||
+    # Take mean across knee joints for each environment
+    reward_term = height_error.unsqueeze(-1) * normalized_knee  # Shape: (num_envs, num_knee_joints)
+    reward = -torch.mean(torch.abs(reward_term), dim=1)  # Shape: (num_envs,)
+    
     return reward

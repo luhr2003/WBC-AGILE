@@ -32,7 +32,7 @@ from agile.rl_env.rsl_rl import (  # noqa: F401
 @configclass
 class G1VelocityHeightPpoRunnerCfg(RslRlOnPolicyRunnerCfg):
     seed = 42
-    num_steps_per_env = 24
+    num_steps_per_env = 96
     max_iterations = 30_000
     save_interval = 250
     experiment_name = "velocity_height_g1_lower"
@@ -45,8 +45,8 @@ class G1VelocityHeightPpoRunnerCfg(RslRlOnPolicyRunnerCfg):
     entropy_annealing_decay_rate = 0.9995
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
-        actor_hidden_dims=[256, 256, 128],
-        critic_hidden_dims=[512, 256, 128],
+        actor_hidden_dims=[1024, 512, 256],
+        critic_hidden_dims=[1024, 512, 256],
         activation="elu",
     )
     algorithm = RslRlPpoAlgorithmCfg(

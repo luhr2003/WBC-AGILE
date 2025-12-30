@@ -331,3 +331,120 @@ class update_reward_weight_step(ManagerTermBase):
 
             env.reward_manager.get_term_cfg(reward_name).weight = new_weight
             return new_weight
+
+
+class upper_body_pose_curriculum(ManagerTermBase):
+    """Curriculum for upper-body pose randomization based on velocity tracking performance.
+    
+    This curriculum adjusts the sampling range of upper body joint angles using the 
+    upper action ratio ra. At the start of training, ra is set to 0. Each time the 
+    policy successfully tracks the linear velocity (reward reaches threshold), ra 
+    increases by a step (default 0.05), eventually reaching 1.0.
+    
+    The sampling uses a probability distribution that smoothly transitions from 
+    being concentrated near 0 to uniform distribution U(0,1) as ra increases.
+    """
+
+    def __init__(self, cfg: EventTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        # Upper action ratio: starts at 0, increases to 1.0
+        self.ra = 0.0
+        self.action_name = cfg.params.get("action_name", "random_upper_body_pos")
+        self.reward_name = cfg.params.get("reward_name", "track_lin_vel_xy_exp")
+        self.reward_threshold = cfg.params.get("reward_threshold", 0.5)
+        self.ra_step = cfg.params.get("ra_step", 0.05)
+        self.max_ra = cfg.params.get("max_ra", 1.0)
+        
+        # Track success rate using exponential moving average
+        self.ema_success_rate = 0.0
+        self.ema_decay = cfg.params.get("ema_decay", 0.99)
+        
+        # Track consecutive successes to increase ra
+        self.consecutive_successes = 0
+        self.required_successes = cfg.params.get("required_successes", 1)
+        
+        # Store action reference (lazy initialization)
+        self._action_term = None
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        env_ids: torch.Tensor,
+        action_name: str = "random_upper_body_pos",
+        reward_name: str = "track_lin_vel_xy_exp",
+        reward_threshold: float = 0.5,
+        ra_step: float = 0.05,
+        max_ra: float = 1.0,
+        required_successes: int = 1,
+        ema_decay: float = 0.99,
+    ) -> float:
+        """Update upper action ratio based on velocity tracking performance.
+        
+        This curriculum evaluates the mean episode reward for environments that just completed
+        episodes. If the mean reward exceeds the threshold, ra is increased.
+        
+        Args:
+            env: The learning environment.
+            env_ids: Environment indices that were reset (episodes just completed).
+            action_name: Name of the random upper body action term.
+            reward_name: Name of the velocity tracking reward term.
+            reward_threshold: Reward threshold to consider as success (episode mean).
+            ra_step: Step size to increase ra when threshold is reached.
+            max_ra: Maximum value of ra.
+            required_successes: Number of consecutive successes needed to increase ra.
+            ema_decay: Decay rate for exponential moving average of success rate.
+            
+        Returns:
+            Current value of ra.
+        """
+        # Get action term reference (lazy initialization)
+        if self._action_term is None:
+            if action_name in env.action_manager._terms:
+                self._action_term = env.action_manager._terms[action_name]
+                # Initialize ra in action term
+                if hasattr(self._action_term, 'set_upper_action_ratio'):
+                    self._action_term.set_upper_action_ratio(self.ra)
+            else:
+                # Action term not found, return current ra
+                return self.ra
+        
+        # Evaluate performance for environments that just completed episodes
+        if len(env_ids) > 0 and reward_name in env.reward_manager._episode_sums:
+            # Get episode sums for the reward term
+            episode_sums = env.reward_manager._episode_sums[reward_name]
+            
+            # Get episode lengths for normalization
+            episode_lengths = env.episode_length_buf[env_ids].float()
+            # Avoid division by zero
+            episode_lengths = torch.clamp(episode_lengths, min=1.0)
+            
+            # Calculate mean reward per step for completed episodes
+            mean_rewards = episode_sums[env_ids] / episode_lengths
+            
+            # Calculate overall mean reward for evaluation
+            mean_reward = mean_rewards.mean().item()
+            
+            # Update EMA success rate
+            is_success = mean_reward >= reward_threshold
+            self.ema_success_rate = ema_decay * self.ema_success_rate + (1 - ema_decay) * float(is_success)
+            
+            # Check if we should increase ra
+            if is_success:
+                self.consecutive_successes += 1
+            else:
+                self.consecutive_successes = 0
+            
+            # Increase ra if we have enough consecutive successes
+            if self.consecutive_successes >= required_successes and self.ra < max_ra:
+                self.ra = min(self.ra + ra_step, max_ra)
+                self.consecutive_successes = 0  # Reset counter
+                
+                # Update action term
+                if hasattr(self._action_term, 'set_upper_action_ratio'):
+                    self._action_term.set_upper_action_ratio(self.ra)
+        
+        # Store current ra in action term (always update to ensure consistency)
+        if hasattr(self._action_term, 'set_upper_action_ratio'):
+            self._action_term.set_upper_action_ratio(self.ra)
+        
+        return self.ra
